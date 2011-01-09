@@ -1,0 +1,67 @@
+<%
+
+use [ingredients tmp t1 t2 name atcobj atcs resobj rxlist ] [
+	t2: now/precise
+	if not value? 'load-json [
+		do http://www.ross-gill.com/r/altjson.r
+	]
+	resObj: make object! [ atc: [] time: none ]
+	atcobj: make object! [
+		atc:
+		rxcui:
+		usan: none
+	]
+	ingredients: copy []
+	; probe request/content
+	either none? content: select request/content 'rxcuilist [
+		; print "No list submitted"
+		ResObj/error: "No List Submitted" 
+		response/buffer: to-json ResObj
+        response/set-header 'Content-type "application/json"
+		quit
+	] [
+		; trim/head/tail content
+		tmp: parse/all dehex content " "
+		rxlist: copy []
+		if tmp [
+			foreach el tmp [
+				trim el
+				if not empty? el [
+					append rxlist el
+				]
+			]
+		]
+		; we got the drug list, now get the ATC codes
+		atcs: copy []
+		foreach el rxlist [
+			; print [ "<br/>checking " el " for cache " ]
+			sql: do-sql 'iam [{select english, code from ATC where rxcui = (?)} el]
+			; probe sql
+			if all [ sql not empty? sql ][
+				foreach record sql [
+					if not found? find atcs record/1 [
+						append atcs make atcobj [
+							atc: record/2
+							usan: record/1
+							rxcui: el
+						]
+						; print [ "found " record/1 <br/> ]
+					]
+				]
+			]
+		]
+		;print {<h2>ATC data for submitted RxCUIs</h2>}
+		;print <pre>
+		;foreach atc atcs [
+		;	probe atc
+		;]
+		;print </pre>
+	]
+	t1: now/precise
+	ResObj/atc: atcs
+	resObj/time: form difference now/precise t2
+	response/buffer: to-json ResObj
+    response/set-header 'Content-type "application/json"
+	; print reform [ <p/> "Time: " difference t1 t2]
+]
+%>

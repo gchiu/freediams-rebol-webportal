@@ -1,0 +1,202 @@
+<html>
+<head>
+	<title>Testing</title>
+</head>
+<body>
+<img src="gel-powered-by.png">
+
+<%
+use [ content ingredients url sql ids classids combined combined2 tmp rxlist knowledgeids druglist tmp interactionlist t1 t2][
+	t2: now/precise
+	if not value? 'load-json [
+		do http://www.ross-gill.com/r/altjson.r
+	]
+	ingredients: copy []
+	druglist: copy []
+	interactionlist: copy []
+	; probe request/content
+	either none? content: select request/content 'rxcuilist [
+		print "No list submitted"
+	][
+		; trim/head/tail content
+		tmp: parse/all content "^/"
+		rxlist: copy []
+		if tmp [
+			foreach el tmp [
+				trim el
+				if not empty? el [
+					append rxlist el
+				]
+			]
+		]
+		print {<h2>List of RxCUIs submitted</h2>}
+		print <ol>
+		foreach rxcui rxlist [
+			print [ <li> rxcui ]
+		]
+		print </ol>
+		; we got the drug list, now get the ingredients
+		foreach rxcui rxlist [
+			if error? set/any 'err try [
+				url: rejoin [ http://rxnav.nlm.nih.gov/REST/rxcui/ rxcui "/allrelated" ] ; related?rela=tradename_of+has_precise_ingredient" ] 
+				jason-info: read/custom url [ get "" [Accept: "Application/JSON" ]]
+				rebol-info: load-json jason-info
+				;print <pre>
+				;probe rebol-info
+				;print </pre>
+				either block? group: rebol-info/allrelatedgroup/conceptgroup [
+					; now get all the ingredients
+					foreach obj group [
+						if obj/tty = "IN" [
+							foreach ingredient obj/conceptProperties [
+								append ingredients ingredient/name
+							]
+						]
+					]		
+				][
+					print "not block relatedgroup/conceptgroup"
+				]
+			][
+				print <pre>
+				print mold disarm err
+				print </pre>
+			]
+		]
+		either empty? ingredients [
+			print "no ingredients"
+		][
+			print "<h3>Ingredient List</h3>"
+			print <ol>
+			foreach ingredient ingredients [
+				print [ <li> ingredient ]
+			]
+			print </ol>
+		]
+		; now that we have a list of ingredients, we can examine the codes
+		ids: copy []
+		ingredients: unique ingredients
+		foreach ingredient ingredients [
+			tmp: copy []
+			sql: do-sql 'iam [ {select id from ATC where english = (?)} uppercase ingredient ]
+			; print ingredient probe sql 
+			if sql [
+				foreach id sql [
+					append ids id
+					append tmp id
+				]
+			]			
+			append druglist ingredient
+			append/only druglist tmp
+		]
+		; now print the ATC ids
+		print {<h3>ATC IDs</h3>}
+		; probe ids
+		probe druglist
+		; now get the ClassIDs
+		classids: copy []
+		foreach id ids [
+			sql: do-sql 'iam [{select id_class from IAM_TREE where ID_ATC = (?)} id ]
+			if sql [
+				foreach classid sql [
+					append classids classid
+					foreach [ drug listofids ] druglist [
+						if find listofids id [
+							append listofids classid
+							break
+						]
+					]
+				]
+			]
+		]
+		print {<h3>Class IDs</h3>}
+		probe classids
+		
+		; now join them
+		combined: sort unique union classids ids
+		print {<h3>Combined IDs</h3>}
+		; probe combined
+		probe druglist
+		print <br/>
+		print {<h3>Drugs not found ..</h3>}
+		foreach [ name list ] druglist [
+			if empty? list [ 
+				print [ name <br/> ]
+				write/append %missingdrugs.txt join name newline
+			]
+		]
+		;;;print {<h3>Interaction Pairs</h3>}
+		; now do a search on each pair
+		knowledgeids: copy []
+		combined2: copy combined
+		foreach atc1 combined [
+			foreach atc2 combined2 [
+				if atc1 <> atc2 [
+					sql: do-sql 'iam [{select interaction_knowledge_id from interactions where atc_id1 = (?) and atc_id2 = (?)} atc1 atc2 ]
+					if sql [
+						;;print [ "interaction found on " atc1 atc2 <br/>]
+						foreach id sql [ 
+							append knowledgeids id
+							append interactionlist id
+							tmp: copy []
+							
+							foreach [ name list ] druglist [
+								if find list atc1 [
+									append tmp name
+									break
+								]
+							]
+							foreach [ name list ] druglist [
+								if find list atc2 [
+									append tmp name
+									break
+								]
+							]
+							sort tmp
+							append/only interactionlist tmp
+						]
+					]
+				]
+			]
+			; don't need to traverse the first each time
+			remove head combined2
+		]
+		print {<h3>Knowledge IDs and Drug Pairs</h3>}
+		probe interactionlist
+		
+		print {<h3>Knowledge IDs</h3>}
+		either empty?  knowledgeids [
+			print "no interactions found."
+		][ 
+			knowledgeids: unique knowledgeids
+			probe knowledgeids 
+		
+		; display any drugs not found
+		
+		
+		; now provide the knowledge
+		foreach id knowledgeids [
+			sql: do-sql 'iam [ {select type, risk_en, management_en from interaction_knowledge where id = (?)} id ]
+			if sql [
+				foreach record sql [
+					print <pre>
+					; print record/1
+					if find record/1 "I" [ print "Informational Warning" ]
+					if find record/1 "P" [ print "Precaution Warning" ]
+					if find record/1 "T" [ print "Advisory Warning" ]
+					if find record/1 "D" [ print "Inadvisable combination" ]
+					if find record/1 "C" [ print "Combination contraindicated" ]
+					print [ "knowledge ID: " id " " <strong> select interactionlist id </strong>]
+					print record/2
+					print record/3
+					print </pre>
+				]
+			]
+		]
+		]
+	]
+	t1: now/precise
+	print [ "Time: " difference t1 t2 ]
+]
+%>
+</body>
+</html>
